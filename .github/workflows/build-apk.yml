@@ -1,0 +1,102 @@
+name: Build APK
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:  # Allows manual trigger from GitHub UI
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Accept Android SDK licenses
+        run: yes | sdkmanager --licenses || true
+
+      - name: Generate launcher icons
+        run: |
+          mkdir -p app/src/main/res/mipmap-hdpi
+          python3 -c "
+          import struct, zlib
+
+          def png(w, h, pixels):
+              def chunk(tag, data):
+                  c = zlib.crc32(tag + data) & 0xffffffff
+                  return struct.pack('>I', len(data)) + tag + data + struct.pack('>I', c)
+              raw = b''.join(b'\x00' + bytes(pixels[y*w*3:(y+1)*w*3]) for y in range(h))
+              return b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', struct.pack('>IIBBBBB', w, h, 8, 2, 0, 0, 0)) + chunk(b'IDAT', zlib.compress(raw)) + chunk(b'IEND', b'')
+
+          w, h = 48, 48
+          # Dark green (near black) background
+          bg = [10, 30, 15]
+          # Emerald green for the U
+          fg = [0, 201, 87]
+
+          px = [0] * (w * h * 3)
+
+          # Fill entire background
+          for i in range(w * h):
+              px[i*3:i*3+3] = bg
+
+          # Draw letter U using pixel coordinates
+          # U shape: two vertical bars + bottom curve
+          for y in range(h):
+              for x in range(w):
+                  idx = (y * w + x) * 3
+
+                  # Left bar of U (x: 10-17, y: 8-34)
+                  if 10 <= x <= 17 and 8 <= y <= 34:
+                      px[idx:idx+3] = fg
+
+                  # Right bar of U (x: 30-37, y: 8-34)
+                  elif 30 <= x <= 37 and 8 <= y <= 34:
+                      px[idx:idx+3] = fg
+
+                  # Bottom curve of U (filled rectangle + rounded feel)
+                  elif 10 <= x <= 37 and 32 <= y <= 40:
+                      px[idx:idx+3] = fg
+
+                  # Round the bottom corners
+                  elif (x < 14 or x > 33) and 38 <= y <= 40:
+                      px[idx:idx+3] = bg
+
+          data = png(w, h, px)
+          with open('app/src/main/res/mipmap-hdpi/ic_launcher.png', 'wb') as f:
+              f.write(data)
+          with open('app/src/main/res/mipmap-hdpi/ic_launcher_round.png', 'wb') as f:
+              f.write(data)
+          print('Icons generated')
+          "
+
+      - name: Download gradle-wrapper.jar
+        run: |
+          mkdir -p gradle/wrapper
+          curl -L "https://github.com/gradle/gradle/raw/v8.4.0/gradle/wrapper/gradle-wrapper.jar" \
+            -o gradle/wrapper/gradle-wrapper.jar
+
+      - name: Make gradlew executable
+        run: chmod +x ./gradlew
+
+      - name: Build Debug APK
+        run: ./gradlew assembleDebug --stacktrace
+
+      - name: Upload APK as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: UninstallPrevention-debug
+          path: app/build/outputs/apk/debug/app-debug.apk
+          retention-days: 30
+
+
